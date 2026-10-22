@@ -1,0 +1,26 @@
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#fdfdfc, #17181a);
+  --fg: light-dark(#1b1c1e, #e8e8ea);
+  --muted: light-dark(#6b6f76, #9a9ea6);
+  --line: light-dark(#d8dade, #35383d);
+  --card: light-dark(#ffffff, #1e1f22);
+  --chip: light-dark(#f1f2f4, #26282c);
+  --accent: light-dark(#2c6ef2, #4f8bff);
+  --accent-fg: #fff;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+}
+
+code {
+  background: var(--chip);
+  padding: 0 0.4ch;
+  border-radius: 4px;
+}
