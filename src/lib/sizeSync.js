@@ -22,19 +22,27 @@
  */
 export function sizeSync(node, opts) {
   let current = opts;
+  /** 上一次由我们自己写进 inline style 的宽高 */
+  let appliedWidth = '';
+  let appliedHeight = '';
 
   function render() {
     const fixed = current.mode === 'fixed';
-    node.style.width = fixed ? `${current.width}px` : '';
-    node.style.height = fixed ? `${current.height}px` : '';
+    appliedWidth = fixed ? `${current.width}px` : '';
+    appliedHeight = fixed ? `${current.height}px` : '';
+    node.style.width = appliedWidth;
+    node.style.height = appliedHeight;
   }
 
   const observer = new ResizeObserver(() => {
     if (current.mode !== 'fixed') return;
+    // 只有原生 resize 手柄会改 inline style；换模式 / 自动重排只会改渲染尺寸，
+    // 所以 inline style 没被动过就不是用户拖的（顺便扔掉上一帧排队中的旧通知）
+    if (node.style.width === appliedWidth && node.style.height === appliedHeight) return;
     const rect = node.getBoundingClientRect();
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
-    // 自己写进去的尺寸只会因取整差 <1px；只有用户拖手柄才明显不同。
+    // 自己写进去的尺寸只会因取整差 <1px
     // （state 超出 max-width 时这里也会回报被夹住后的真实尺寸，state 随之收敛。）
     if (Math.abs(width - current.width) <= 1 && Math.abs(height - current.height) <= 1) return;
     current.onResize({ width, height });

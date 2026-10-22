@@ -1,5 +1,13 @@
 <script>
-  import { CANDIDATES, DEFAULT_SELECTED, GENERICS, cssList, cssStack, detectAll } from './lib/fonts.js';
+  import {
+    CANDIDATES,
+    DEFAULT_SELECTED,
+    GENERICS,
+    cssList,
+    cssStack,
+    detectAll,
+    readFontFamily,
+  } from './lib/fonts.js';
   import { scrollSync, sizeSync } from './lib/sizeSync.js';
 
   const DEFAULT_TEXT = `The quick brown fox jumps over the lazy dog 0123456789
@@ -8,6 +16,7 @@
 
   const TEXT_KEY = 'fontTest.text.v1';
   const SELECTED_KEY = 'fontTest.selected.v1';
+  const SETTINGS_KEY = 'fontTest.settings.v1';
   const LOCAL_FONTS_KEY = 'fontTest.localFonts.v1';
 
   /** 从 localStorage 读一个字符串数组；缺失/坏数据/不可用时返回 fallback */
@@ -47,25 +56,50 @@
     return () => clearTimeout(timer);
   });
 
-  let fontSize = $state(16);
-  let lineHeight = $state(1);
-  /** 尺寸：fixed 时所有卡片共享同一 px；auto 时宽=最长行全宽、高=内容全高 */
-  let heightMode = $state(/** @type {'fixed' | 'auto'} */ ('fixed'));
-  let boxWidth = $state(320);
-  let boxHeight = $state(150);
-  /** 固定模式（有滚动条）下，滚动一个框会把其它框按比例滚到同一位置 */
-  let syncScroll = $state(true);
-  let selected = $state(loadList(SELECTED_KEY, [...DEFAULT_SELECTED]));
-  let query = $state('');
-  let onlyAvailable = $state(false);
-  let localFontsNote = $state('');
-  let copyNote = $state('');
-
-  /** 上次读到的系统字体族也一起记下，否则刷新后勾选的本地字体会变成「没 chip 可选中的卡片」 */
-  let localFonts = $state(loadList(LOCAL_FONTS_KEY));
-  if (localFonts.length) {
-    localFontsNote = `已恢复上次读到的 ${localFonts.length} 个字体族（可点「读取系统字体列表」刷新）`;
+  /** 除文本之外的 UI 状态整包存一个 key；读时逐项校验，坏值退回默认 */
+  function loadSettings() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
   }
+
+  const saved = loadSettings();
+  const positive = (value, fallback) => (Number.isFinite(value) && value > 0 ? value : fallback);
+
+  let fontSize = $state(positive(saved.fontSize, 16));
+  let lineHeight = $state(positive(saved.lineHeight, 1));
+  /** 尺寸：fixed 时所有卡片共享同一 px；auto 时宽=最长行全宽、高=内容全高 */
+  let heightMode = $state(
+    /** @type {'fixed' | 'auto'} */ (saved.heightMode === 'auto' ? 'auto' : 'fixed'),
+  );
+  let boxWidth = $state(positive(saved.boxWidth, 320));
+  let boxHeight = $state(positive(saved.boxHeight, 150));
+  /** 固定模式（有滚动条）下，滚动一个框会把其它框按比例滚到同一位置 */
+  let syncScroll = $state(typeof saved.syncScroll === 'boolean' ? saved.syncScroll : true);
+  let query = $state(typeof saved.query === 'string' ? saved.query : '');
+  let onlyAvailable = $state(saved.onlyAvailable === true);
+
+  /** 系统字体族（queryLocalFonts，可缓存）与本次导入的字体文件（会话内有效）分开存 */
+  const cachedSystemFonts = loadList(LOCAL_FONTS_KEY);
+  let systemFonts = $state(cachedSystemFonts);
+  let fileFonts = $state([]);
+  const localFonts = $derived([...systemFonts, ...fileFonts]);
+
+  /** 勾选的字体：丢掉当前认不得的名字（文件导入的字体刷新后就没了，留着只会变成坏卡片） */
+  const knownFamilies = new Set([...GENERICS, ...CANDIDATES, ...cachedSystemFonts]);
+  let selected = $state(
+    loadList(SELECTED_KEY, [...DEFAULT_SELECTED]).filter((f) => knownFamilies.has(f)),
+  );
+
+  let localFontsNote = $state(
+    cachedSystemFonts.length
+      ? `已恢复上次读到的 ${cachedSystemFonts.length} 个字体族（可点「读取系统字体列表」刷新）`
+      : '',
+  );
+  let copyNote = $state('');
 
   /** 勾选的字体列表跨刷新保留（空数组也保留，即「清空」是有效状态） */
   $effect(() => {
@@ -75,6 +109,19 @@
     } catch {
       // 同上，忽略
     }
+  });
+
+  /** 字号 / 行高 / 尺寸 / 同步滚动 / 筛选条件全部跨刷新保留（拖手柄会频繁变，防抖写） */
+  $effect(() => {
+    const value = { fontSize, lineHeight, heightMode, boxWidth, boxHeight, syncScroll, query, onlyAvailable };
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(value));
+      } catch {
+        // 写不进去就算了
+      }
+    }, 200);
+    return () => clearTimeout(timer);
   });
 
   const fontList = $derived([...new Set([...GENERICS, ...CANDIDATES, ...localFonts])]);
@@ -177,7 +224,7 @@
       const families = [...new Set(fonts.map((f) => f.family))].sort((a, b) =>
         a.localeCompare(b, 'zh-Hans-CN'),
       );
-      localFonts = families;
+      systemFonts = families;
       localFontsNote = `读到 ${families.length} 个字体族（含样式 ${fonts.length} 条）`;
       try {
         localStorage.setItem(LOCAL_FONTS_KEY, JSON.stringify(families));
@@ -187,6 +234,72 @@
     } catch (error) {
       localFontsNote = `读取失败：${error?.message ?? error}（需要用户授权，且必须 localhost / https）`;
     }
+  }
+
+  /** 一次最多读多少个文件（CJK 字体动耼十几 MB，别一口气吃爆内存） */
+  const MAX_IMPORT_FILES = 40;
+  const MAX_FONT_BYTES = 128 * 1024 * 1024;
+  /** @type {HTMLInputElement | null} */
+  let fileInput = $state(null);
+  /** @type {HTMLInputElement | null} */
+  let dirInput = $state(null);
+
+  /**
+   * 读本地字体文件：FontFace + ArrayBuffer 是标准 API，Chrome / Firefox 都支持，
+   * 所以「选文件」与「选文件夹」（`webkitdirectory`，两家都实现了）共用这一条路径。
+   * 字体族名从 sfnt 的 name 表里读（woff/woff2 是压缩容器，退回文件名）。
+   */
+  async function importFonts(fileList) {
+    const candidates = [...fileList].filter((file) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(file.name));
+    if (!candidates.length) {
+      localFontsNote = '没找到字体文件（支持 .ttf / .otf / .ttc / .woff / .woff2）';
+      return;
+    }
+
+    const batch = candidates.slice(0, MAX_IMPORT_FILES);
+    const families = [];
+    const failed = [];
+    let skipped = 0;
+
+    for (const file of batch) {
+      if (file.size > MAX_FONT_BYTES) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const buffer = await file.arrayBuffer();
+        const family = readFontFamily(buffer) ?? file.name.replace(/\.[^.]+$/, '');
+        const face = new FontFace(family, buffer);
+        await face.load();
+        document.fonts.add(face);
+        families.push(family);
+      } catch {
+        failed.push(file.name);
+      }
+    }
+
+    const added = [...new Set(families)];
+    if (added.length) {
+      fileFonts = [...new Set([...fileFonts, ...added])];
+      selected = [...selected, ...added.filter((family) => !selected.includes(family))];
+    }
+
+    const notes = [added.length ? `导入 ${added.length} 个字体族` : '没有导入成功的字体'];
+    if (candidates.length > batch.length) {
+      notes.push(`只读了前 ${batch.length} 个文件（共 ${candidates.length} 个）`);
+    }
+    if (skipped) notes.push(`跳过 ${skipped} 个超过 ${MAX_FONT_BYTES / 1024 / 1024}MB 的文件`);
+    if (failed.length) {
+      notes.push(`失败 ${failed.length} 个（${failed.slice(0, 3).join('、')}${failed.length > 3 ? '…' : ''}）`);
+    }
+    notes.push('文件字体只在本次会话有效');
+    localFontsNote = notes.join('；');
+  }
+
+  function onFilesPicked(event) {
+    const input = event.currentTarget;
+    if (input.files?.length) importFonts(input.files);
+    input.value = ''; // 同一个文件再选一次也要能触发
   }
 
   function badgeOf(family) {
@@ -254,6 +367,29 @@
     <button onclick={loadLocalFonts} disabled={!hasLocalFontApi}>
       读取系统字体列表{hasLocalFontApi ? '' : '（不支持）'}
     </button>
+    <button onclick={() => fileInput?.click()}>打开字体文件…</button>
+    <button
+      onclick={() => dirInput?.click()}
+      title="选一个文件夹，自动读里面所有字体文件（Chrome / Firefox 都支持）"
+    >
+      打开字体文件夹…
+    </button>
+    <input
+      class="file-input"
+      type="file"
+      multiple
+      accept=".ttf,.otf,.ttc,.otc,.woff,.woff2"
+      bind:this={fileInput}
+      onchange={onFilesPicked}
+    />
+    <input
+      class="file-input"
+      type="file"
+      webkitdirectory="webkitdirectory"
+      multiple
+      bind:this={dirInput}
+      onchange={onFilesPicked}
+    />
   </section>
   {#if localFontsNote}
     <p class="note">{localFontsNote}</p>
@@ -370,6 +506,10 @@
 
   .num {
     width: 7ch;
+  }
+
+  .file-input {
+    display: none;
   }
 
   .picker {

@@ -44,6 +44,17 @@ bun run dev   # → http://127.0.0.1:5180/
   - `check✓` = `document.fonts.check('16px "X"')` 也返回 true（附加参考，不参与判定）。
 - **读取系统字体列表**：调用 `window.queryLocalFonts()`（Local Font Access API，Chromium 系）。
   需要用户手势 + 授权，且必须 localhost/https；headless 下常被直接拒绝，会显示拒绝原因。
+- **读取字体文件 / 文件夹**（不依赖 Chromium 专有 API，Chrome / Firefox / Safari 都能用）：
+  - `打开字体文件…` = `<input type="file" multiple>`；`打开字体文件夹…` = 同一个 input 加 `webkitdirectory`
+    （两家浏览器都实现了，所以不需要 Chrome 的 `showDirectoryPicker`）。
+  - 每个文件走标准 `new FontFace(family, arrayBuffer)` + `document.fonts.add()`，按内容自动命名、
+    导入后自动入选中列表，检测 badge 也照常算；支持 `.ttf` `.otf` `.ttc` `.otc` `.woff` `.woff2`。
+  - 字体族名从 sfnt 的 `name` 表里读（`src/lib/fonts.js: readFontFamily()`，**英文名优先**，
+    typographic family 优先于带 `Bold` 后缀的 legacy family）；`.woff` / `.woff2` 是压缩容器，解析不动，
+    退回用文件名。`.ttc` 字体集合只能注册 **第一个 face**（`FontFace` 没有 face index 参数）。
+  - 防护：一次最多读 40 个文件、单个文件 ≤ 128MB，超了跳过并在提示里写清楚。
+  - 这些字体**只在本次会话有效**（不写 localStorage，否则得把整个字体文件塞进去），
+    刷新后对应名字会从勾选列表里剔除，不会留下渲染不出的坏卡片。
 - 字号 / 行高实时可调，卡片底部显示实际 `font-family` 栈；卡片用 flex-wrap 排列，超宽卡片独占一行。
 
 ## 可用性检测原理（`src/lib/fonts.js`）
@@ -80,13 +91,29 @@ metrics("72px \"Some Font\", <基线>")  vs  metrics("72px <基线>")
 index.html           # 入口
 src/main.js          # mount(App)
 src/App.svelte       # 全部 UI + 样式（scoped）；auto 模式的尺寸走 CSS
-src/lib/fonts.js     # 候选/通用字体列表 + canvas 检测（纯逻辑，不依赖 Svelte）
+src/lib/fonts.js     # 候选/通用字体列表 + canvas 检测 + 字体文件 name 表解析（纯逻辑，不依赖 Svelte）
 src/lib/sizeSync.js  # fixed 尺寸下发 + 拖拽回写；scrollSync 比例对齐
 src/app.css          # 仅 root token / body 基础样式
 ```
 
-浏览器要求：`auto` 模式依赖 CSS `field-sizing: content`（Chromium 123+），
-「读取系统字体列表」依赖 Local Font Access API（仅 Chromium 系）。
+浏览器要求：
+
+- `auto` 模式：CSS `field-sizing: content`（Chromium 123+ / 较新的 Firefox、Safari）
+- `读取系统字体列表`：Local Font Access API，仅 Chromium 系
+- `读取字体文件 / 文件夹`、`复制`、持久化：标准 `FontFace` + `File` + `localStorage`，
+  各家浏览器都可用（`webkitdirectory` Firefox 50+ 也支持）
+
+## 持久化
+
+| localStorage key | 内容 |
+|---|---|
+| `fontTest.text.v1` | textarea 里的文本（等于默认文本时删 key） |
+| `fontTest.selected.v1` | 勾选的字体列表（`[]` 也算有效状态） |
+| `fontTest.settings.v1` | 字号 / 行高 / `fixed`、`auto` / 固定宽高 / 同步滚动 / 筛选词 / 「只显示检测到的」 |
+| `fontTest.localFonts.v1` | `queryLocalFonts()` 读到的字体族名缓存 |
+
+读的时候逐项校验（非法数值、非布尔值、重复或非字符串项都丢掉），localStorage 不可用就用默认值；
+文本与设置写入都做了 200ms 防抖（拖 resize 手柄时会频繁变）。
 
 ## 简化记录
 
