@@ -25,8 +25,9 @@ bun run dev   # → http://127.0.0.1:5180/
   - `auto` 模式：**宽 = 该框内最长行的完整宽度**，**高 = 内容的完整高度**，两个方向都没滚动条。
     各字体行宽不同 → 各框宽高可以不一样。
   - 两种模式用第 1 行「尺寸」按钮切换（`fixed` 显示当前 px）。
-  - 尺寸本身交给 CSS：`auto` 模式是 `field-sizing: content`（浏览器按内容定宽高），
-    `fixed` 模式是 JS 写 `width` / `height`；JS 只负责「拖一个，其它跟着变」。
+  - 尺寸本身交给 CSS / 模板：`auto` 模式是 `field-sizing: content`（浏览器按内容定宽高），
+    `fixed` 模式由模板的 `style` 属性按 state 写 `width` / `height`；
+    action 只负责「拖一个，其它跟着变」（不碰 inline style，详见下方简化记录）。
   - **宽度上限** = `main` 内容宽 − 卡片左右 padding − 边框（`max-width: calc(100cqw - 1.5rem - 2px)`）：
     最长行装不下时自动回到换行并按该宽度重算高；`fixed` 模式拖宽也夹在这个上限内。
     窗口缩放由 CSS 自己跟着变，没有 `resize` 监听器。
@@ -88,12 +89,14 @@ metrics("72px \"Some Font\", <基线>")  vs  metrics("72px <基线>")
 ## 结构
 
 ```
-index.html           # 入口
-src/main.js          # mount(App)
-src/App.svelte       # 全部 UI + 样式（scoped）；auto 模式的尺寸走 CSS
-src/lib/fonts.js     # 候选/通用字体列表 + canvas 检测 + 字体文件 name 表解析（纯逻辑，不依赖 Svelte）
-src/lib/sizeSync.js  # fixed 尺寸下发 + 拖拽回写；scrollSync 比例对齐
-src/app.css          # 仅 root token / body 基础样式
+index.html              # 入口
+src/main.js             # mount(App)
+src/App.svelte          # UI 与状态编排（runes）+ scoped 样式
+src/lib/fonts.js        # 候选/通用字体列表 + canvas 可用性检测 + CSS 栈拼装
+src/lib/fontFiles.js    # 本地字体文件：name 表解析 + FontFace 注册（含限额）
+src/lib/sizeSync.js     # fixed 尺寸拖拽回写 + 按比例同步滚动
+src/lib/storage.svelte.js # localStorage：schema 校验 + 防抖写
+src/app.css             # 仅 root token / body 基础样式
 ```
 
 浏览器要求：
@@ -117,7 +120,7 @@ src/app.css          # 仅 root token / body 基础样式
 
 ## 简化记录
 
-用消融实验（逐个拿掉实现、看行为差分）砍掉的东西：
+用消融实验（逐个拿掉实现、看行为差分）砍掉的东西。第一轮（尺寸/检测）：
 
 | 拿掉的部分 | 为什么能拿 |
 |---|---|
@@ -129,8 +132,21 @@ src/app.css          # 仅 root token / body 基础样式
 | `data-mode` 属性作为跨模块契约（scrollSync 读它判断模式） | 改成向 action 传 `enabled: syncScroll && mode === 'fixed'` |
 | `quoteFamily` 里的正则 + 手写转义 | `JSON.stringify` 就是合法 CSS 字串；通用族靠 `GENERIC_ALIASES` 短接 |
 
-规模：`src/` 915 → 771 行（`sizeSync.js` 213 → 95，`App.svelte` 459 → 455，`fonts.js` +3 行注释）。
-功能上只少了两个交互快捷方式：拖到内容高自动切自适应、双击右下角切模式（都改由「尺寸」按钮完成）。
+第二轮（抽象/模块化）：
+
+| 改动 | 结果 |
+|---|---|
+| action 不再写 inline `width` / `height`，改由模板的 `style` 属性从 state 写 | **修掉一个真 bug**：Svelte 更新 `style` 属性时会抹掉 action 写的尺寸，`fixed` 模式改字号后框会塔成浏览器默认尺寸（实测 360×140 → 287×68）；现在 action 只读 style 判断“是不是用户拖的” |
+| 持久化样板（4 个 key × 逐个校验 + 防抖 `$effect` + try/catch） | 抽成 `src/lib/storage.svelte.js`：`readSettings(key, schema)` + `autoSave(getter, save)`；新增一个持久化字段 = schema 一行 |
+| 字体文件导入（筛扩展名 / 限大小 / FontFace / 组提示文本）与 name 表解析 | 抽成 `src/lib/fontFiles.js`；`fonts.js` 只留候选列表 + canvas 检测 |
+| 两个提示位（`localFontsNote` + `copyNote` + 两个定时器） | 合并为一个 `note` + `say(message, ttl)` |
+| 字号/行高两套输入框（一个手写校验、一个 `bind:value`） | 一个 `{#snippet numberField}` + 统一 `setNumber()` 校验（顺手修了行高可被写成空值/NaN 的隐患） |
+| 全选/反选/清空三份 `includes` 扫描 | `selectedSet` / `visibleSet` 两个 `$derived(Set)` + 一个 `pick(predicate)` |
+| name 表的手写 UTF-16BE / MacRoman 解码 | `TextDecoder('utf-16be')` / `TextDecoder('macintosh')`（解析结果与之前、与 `fc-scan` 逐字一致） |
+
+规模（去注释/空行）：`src/` 880 → 925 行，但拆成了 5 个职责单一的文件（`App.svelte` 583 → 550，
+`fonts.js` 209 → 149，`sizeSync.js` 60 → 51，新增 `fontFiles.js` 93、`storage.svelte.js` 54）。
+代码总量略升是因为把原本写死在组件里的机制抽象成了可复用模块；组件侧的样板明显变少。
 
 依赖写在 `package.json` 的 `devDependencies`（svelte 5 / vite 8 / @sveltejs/vite-plugin-svelte），
 `bun install` 装到本地 `node_modules`，不依赖任何其他仓库。

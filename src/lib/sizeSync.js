@@ -1,14 +1,13 @@
 /**
  * textarea 尺寸同步 action。
  *
- * 尺寸本身基本不归 JS 管：
- * - `auto` 模式：CSS 的 `field-sizing: content` 让浏览器按内容定宽（= 最长行）定高（= 内容全高），
- *   `max-width` 负责最长行装不下时回到换行。这里一行测量代码都不用写。
- * - `fixed` 模式：把 opts.width / opts.height 写到每个 textarea 上（所有卡片共享同一 px）。
- *   `max-width` 同样夹住拖宽的上限，所以 JS 不用算「可用宽度」。
+ * 尺寸本身不归 JS 管：
+ * - `fixed` 模式：宽高由模板的 `style` 属性按 state 写成 px（所有卡片共享同一值）。
+ * - `auto` 模式：CSS 的 `field-sizing: content` 按内容定宽高，`max-width` 负责装不下时换行。
  *
- * JS 只剩一件事：用户在 fixed 模式拖原生 resize 手柄时，ResizeObserver 量到的尺寸和 state 对不上，
- * 就把新尺寸回报给组件回写 state —— 其余卡片跟着一起变。
+ * 所以这里只做一件事：用户在 fixed 模式拖原生 resize 手柄时，把新尺寸回报给组件回写 state。
+ * 注意不要在这里写 inline style —— 模板的 style 属性一更新就会把它们抹掉
+ * （旧实现因此会在改字号时把框塌成浏览器默认尺寸）。
  */
 
 /**
@@ -22,39 +21,26 @@
  */
 export function sizeSync(node, opts) {
   let current = opts;
-  /** 上一次由我们自己写进 inline style 的宽高 */
-  let appliedWidth = '';
-  let appliedHeight = '';
-
-  function render() {
-    const fixed = current.mode === 'fixed';
-    appliedWidth = fixed ? `${current.width}px` : '';
-    appliedHeight = fixed ? `${current.height}px` : '';
-    node.style.width = appliedWidth;
-    node.style.height = appliedHeight;
-  }
 
   const observer = new ResizeObserver(() => {
     if (current.mode !== 'fixed') return;
-    // 只有原生 resize 手柄会改 inline style；换模式 / 自动重排只会改渲染尺寸，
-    // 所以 inline style 没被动过就不是用户拖的（顺便扔掉上一帧排队中的旧通知）
-    if (node.style.width === appliedWidth && node.style.height === appliedHeight) return;
+    // 尺寸和 state 一致 → 这次变化是模板按 state 写的，不是用户拖的
+    if (node.style.width === `${current.width}px` && node.style.height === `${current.height}px`) {
+      return;
+    }
     const rect = node.getBoundingClientRect();
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
-    // 自己写进去的尺寸只会因取整差 <1px
-    // （state 超出 max-width 时这里也会回报被夹住后的真实尺寸，state 随之收敛。）
+    // 取整误差 / 被 max-width 夹住后的收敛过程不回报
     if (Math.abs(width - current.width) <= 1 && Math.abs(height - current.height) <= 1) return;
     current.onResize({ width, height });
   });
 
   observer.observe(node);
-  render();
 
   return {
     update(next) {
       current = next;
-      render();
     },
     destroy() {
       observer.disconnect();
