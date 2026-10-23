@@ -14,6 +14,21 @@ export function readString(key, fallback) {
   }
 }
 
+/**
+ * 读纯文本。兼容两种存量格式：按 JSON 字符串写入的（当前写法）和早期直接写原始字符串的。
+ * 注意别用 `readString` 读 `writeJson` 写的东西 —— 那样拿到的是带引号和 `\n` 转义的源码。
+ */
+export function readText(key, fallback) {
+  const raw = readString(key, null);
+  if (raw === null) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'string' ? parsed : raw;
+  } catch {
+    return raw;
+  }
+}
+
 /** 读 JSON；缺失 / 坏数据 / 无权限都返回 fallback */
 export function readJson(key, fallback) {
   try {

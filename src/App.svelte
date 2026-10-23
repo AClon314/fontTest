@@ -12,7 +12,7 @@
   import {
     autoSave,
     readSettings,
-    readString,
+    readText,
     readStringList,
     removeKey,
     writeJson,
@@ -41,7 +41,7 @@
   const saved = readSettings(SETTINGS_KEY, SETTINGS_SCHEMA);
 
   /** 所有卡片共享的同一段文本 */
-  let text = $state(readString(TEXT_KEY, DEFAULT_TEXT));
+  let text = $state(readText(TEXT_KEY, DEFAULT_TEXT));
   let fontSize = $state(saved.fontSize);
   let lineHeight = $state(saved.lineHeight);
   /** 尺寸：fixed 时所有卡片共享同一 px；auto 时宽=最长行全宽、高=内容全高 */
