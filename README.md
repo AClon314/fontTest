@@ -50,13 +50,44 @@ bun run dev   # → http://127.0.0.1:5180/
     （两家浏览器都实现了，所以不需要 Chrome 的 `showDirectoryPicker`）。
   - 每个文件走标准 `new FontFace(family, arrayBuffer)` + `document.fonts.add()`，按内容自动命名、
     导入后自动入选中列表，检测 badge 也照常算；支持 `.ttf` `.otf` `.ttc` `.otc` `.woff` `.woff2`。
-  - 字体族名从 sfnt 的 `name` 表里读（`src/lib/fonts.js: readFontFamily()`，**英文名优先**，
+  - 字体族名从 sfnt 的 `name` 表里读（`src/lib/fontFiles.js: readFontFamily()`，**英文名优先**，
     typographic family 优先于带 `Bold` 后缀的 legacy family）；`.woff` / `.woff2` 是压缩容器，解析不动，
     退回用文件名。`.ttc` 字体集合只能注册 **第一个 face**（`FontFace` 没有 face index 参数）。
   - 防护：一次最多读 40 个文件、单个文件 ≤ 128MB，超了跳过并在提示里写清楚。
   - 这些字体**只在本次会话有效**（不写 localStorage，否则得把整个字体文件塞进去），
     刷新后对应名字会从勾选列表里剔除，不会留下渲染不出的坏卡片。
+- **网络字体（CDN，默认不加载）**：`加载网络字体 Maple Mono NF CN（CDN）` 按钮 = 注入
+  `https://fontsapi.zeoseven.com/442/main/result.css` 后把该族加进候选。没点之前一个字节都不下载。
+  实测加载量、防盗链坑见下一节。
 - 字号 / 行高实时可调，卡片底部显示实际 `font-family` 栈；卡片用 flex-wrap 排列，超宽卡片独占一行。
+
+## 网络字体（ZeoSeven CDN 上的 Maple Mono NF CN）
+
+`https://fonts.zeoseven.com/items/442/` 是 Maple Mono NF CN（圆角等宽 + 连字 + Nerd Font 图标 + 中日韩字形，
+SIL OFL 1.1）。它用 `cn-font-split` 把字体切成 **191 个 woff2 分块**，每块带自己的 `unicode-range`，
+浏览器只会下载「页面真的用到的字形」所在的分块。用裸 Chrome + CDP 量的真实传输量（含 gzip）：
+
+| 场景 | 字体分块 | 字体字节 | + 样式表 | 合计 |
+|---|---|---|---|---|
+| 纯英文 + 数字（默认文本第一行） | 2 块 | ~61 KB | 48.3 KB | **~0.11 MB** |
+| 应用默认文本（110 字，含几十个汉字与繁体） | 16 块 | 783 KB | 48.3 KB | **~0.81 MB** |
+| 100 个常用汉字 + 英文 | 7 块 | 246 KB | 48.3 KB | **~0.29 MB** |
+| 300 个不重复汉字 | 18 块 | 1.05 MB | 48.3 KB | **~1.10 MB** |
+| 460 个不重复汉字（README 全文的汉字集合） | 21 块 | 1.31 MB | 48.3 KB | **~1.36 MB** |
+| 全部 191 块（整个字体的字形集合） | 191 块 | 10.23 MB | 48.3 KB | **~10.3 MB** |
+
+样式表 151 KB 原始 / 48.3 KB gzip（191 条 `@font-face`，解析本身很快）；分块带
+`cache-control: public, immutable, max-age=31536000`，同一浏览器第二次只付样式表（还能 304）。
+结论：**不会一上来就 10MB**，实际是 0.1～1.4 MB 量级，取决于文本里出现了多少不重复的字。
+
+⚠️ **防盗链**：该 CDN 对 `Referer` 是 **IP 字面量**（`http://127.0.0.1:5180`、`http://192.168.x.x`、`http://[::1]`）
+或 **没有 UA** 的请求直接返回 `204 No Content`（0 字节），浏览器控制台不会有报错，只是字体静默不生效
+（`document.fonts.size === 0`）。用域名（`http://localhost:5180`）或干脆不发 Referer 就正常。
+所以注入 `<link>` 时显式设了 `link.referrerPolicy = 'no-referrer'`；想写死静态 `<link>` 的话要带
+`referrerpolicy="no-referrer"` 或页面里加 `<meta name="referrer" content="no-referrer">`。
+
+加载流程：插 `<link>` → 等 `load` → `await document.fonts.load('16px "Maple Mono NF CN"', 当前文本)`
+先把当前文本的分块拉下来 → 才把族名加进候选列表，这样紧接着的 canvas 检测量到的是真字体而不是回退字体。
 
 ## 可用性检测原理（`src/lib/fonts.js`）
 

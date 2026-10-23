@@ -3,6 +3,7 @@
     CANDIDATES,
     DEFAULT_SELECTED,
     GENERICS,
+    NETWORK_FONTS,
     cssList,
     cssStack,
     detectAll,
@@ -57,7 +58,9 @@
   const cachedSystemFonts = readStringList(LOCAL_FONTS_KEY);
   let systemFonts = $state(cachedSystemFonts);
   let fileFonts = $state([]);
-  const localFonts = $derived([...systemFonts, ...fileFonts]);
+  /** 点了才加载的 CDN 字体族（同样只在本次会话有效） */
+  let cdnFamilies = $state([]);
+  const localFonts = $derived([...systemFonts, ...fileFonts, ...cdnFamilies]);
 
   /** 勾选的字体：丢掉当前认不得的名字（文件导入的字体刷新后就没了，留着只会变成坏卡片） */
   const knownFamilies = new Set([...GENERICS, ...CANDIDATES, ...cachedSystemFonts]);
@@ -232,6 +235,40 @@
     say(parts.join('；'));
   }
 
+  /** 已注入过 <link> 的 href，重复点不会重复插样式表 */
+  const loadedStylesheets = new Set();
+
+  /**
+   * 按需加载一个 CDN 字体：插样式表 → 等它下载完 → 触发一次字形下载 → 加进候选并选中。
+   * 注意 referrerPolicy：ZeoSeven 的 CDN 见到 IP 字面量 Referer（http://127.0.0.1:5180）会回 204 空内容。
+   */
+  async function loadNetworkFont(font) {
+    say(`正在加载 ${font.family}…`);
+    try {
+      if (!loadedStylesheets.has(font.href)) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = font.href;
+        link.referrerPolicy = 'no-referrer';
+        const ready = new Promise((resolve, reject) => {
+          link.onload = resolve;
+          link.onerror = () => reject(new Error('样式表加载失败'));
+        });
+        document.head.appendChild(link);
+        await ready;
+        loadedStylesheets.add(font.href);
+      }
+      // 先把当前文本需要的分块拉下来，这样紧接着的 canvas 检测量到的就是真字体而不是回退字体
+      await document.fonts.load(`16px ${JSON.stringify(font.family)}`, text.slice(0, 120));
+    } catch (error) {
+      say(`加载失败：${error?.message ?? error}`);
+      return;
+    }
+    cdnFamilies = [...new Set([...cdnFamilies, font.family])];
+    if (!selectedSet.has(font.family)) selected = [...selected, font.family];
+    say(`${font.family} 已加载：只下载了当前文本用到的字形分块（整字体 10.2MB）`, 6000);
+  }
+
   function badgeOf(family) {
     const d = detection[family];
     if (!d) return '';
@@ -316,6 +353,15 @@
     >
       打开字体文件夹…
     </button>
+    {#each NETWORK_FONTS as font (font.family)}
+      <button
+        onclick={() => loadNetworkFont(font)}
+        disabled={cdnFamilies.includes(font.family)}
+        title={`${font.hint}。按 unicode-range 分块，只下载实际用到的字形：纯英文约 60KB，含几十个汉字 0.3~0.8MB，常用汉字全覆盖约 1.3MB（整字体 10.2MB）。`}
+      >
+        {cdnFamilies.includes(font.family) ? `已加载 ${font.family}` : `加载网络字体 ${font.label}`}
+      </button>
+    {/each}
     <input
       class="file-input"
       type="file"

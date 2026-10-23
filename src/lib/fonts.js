@@ -195,3 +195,22 @@ export const DEFAULT_SELECTED = [
   'Sarasa Gothic SC',
   'serif',
 ];
+
+/**
+ * 可选的网络字体（默认不加载，点了才注入 <link>）。
+ *
+ * ZeoSeven 的 CDN 用 cn-font-split 把字体切成 191 个 woff2 分块，每块带 unicode-range，
+ * 浏览器只下载「页面真的用到的字形」所在的分块（实测：纯英文 ~60KB；含几十个汉字 0.3~0.8MB；
+ * 常用汉字全覆盖约 1.3MB；全部 191 块合计 10.2MB）。样式表本身 151KB（gzip 后 48KB）。
+ *
+ * 防盗链：该 CDN 对 Referer 是 IP 字面量（如 http://127.0.0.1:5180）的请求直接返回 204 空内容，
+ * 所以注入的 <link> 必须带 referrerPolicy="no-referrer"，否则本地开发时字体静默不加载。
+ */
+export const NETWORK_FONTS = [
+  {
+    family: 'Maple Mono NF CN',
+    label: 'Maple Mono NF CN（CDN）',
+    href: 'https://fontsapi.zeoseven.com/442/main/result.css',
+    hint: '圆角等宽 + 连字 + Nerd Font 图标 + 中日韩字形，SIL OFL 1.1；按 unicode-range 分块，只下载用到的字形',
+  },
+];
